@@ -2,6 +2,7 @@ package com.example.concurrency.producerconsumer;
 
 import java.time.Instant;
 import java.util.Random;
+import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
@@ -11,9 +12,20 @@ import java.util.concurrent.locks.LockSupport;
  * a rejection handler that runs work on the caller thread.
  */
 public class BackpressureRunner {
+    /** A single periodic snapshot of the executor state. */
+    public record Sample(long epochMillis, int queueDepth, int activeWorkers, long completedTasks) {}
+
+    /** Last run's samples exposed for tests (read-only copy). */
+    private static volatile List<Sample> LAST_SAMPLES = List.of();
+
+    /** Returns the last recorded samples for the most recent run. */
+    public static List<Sample> lastSamples() {
+        return LAST_SAMPLES;
+    }
+
 
     /** Captures essential metrics for quick assertions. */
-    public record Metrics(int produced, int consumed, int callerRuns, int rejected, int queueEnd) {}
+    public record Metrics(int produced, int consumed, int callerRuns, int rejected, int queueEnd, int samplesCount) {}
 
     /** Execute a run with the given parameters. */
     public static Metrics run(int poolSize, int queueCapacity, int durationSec, int producerRatePerSec) {
@@ -28,6 +40,22 @@ public class BackpressureRunner {
                         workQueue,
                         new ThreadFactory() {
                             private final AtomicInteger idx = new AtomicInteger();
+        // --- Metrics sampler: periodically capture queue depth, active workers, and completed tasks
+        List<Sample> _samples = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.concurrent.ScheduledExecutorService _sampler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "metrics-sampler");
+            t.setDaemon(true);
+            return t;
+        });
+        _sampler.scheduleAtFixedRate(() -> {
+            try {
+                int depth = workQueue.size();
+                int active = executor.getActiveCount();
+                long completed = executor.getCompletedTaskCount();
+                _samples.add(new Sample(System.currentTimeMillis(), depth, active, completed));
+            } catch (Throwable ignore) { /* keep sampling lightweight */ }
+        }, 0, 100, java.util.concurrent.TimeUnit.MILLISECONDS);
+
                             @Override
                             public Thread newThread(Runnable r) {
                                 Thread t = new Thread(r, "pc-worker-" + idx.incrementAndGet());
@@ -91,6 +119,16 @@ public class BackpressureRunner {
             Thread.currentThread().interrupt();
         }
 
-        return new Metrics(produced.get(), consumed.get(), callerRuns.get(), rejected.get(), workQueue.size());
+        
+        // Stop sampler and publish samples for tests
+        _sampler.shutdownNow();
+        LAST_SAMPLES = java.util.Collections.unmodifiableList(new java.util.ArrayList<>(_samples));
+        // Optional: print simple summary
+        if (!LAST_SAMPLES.isEmpty()) {
+            Sample last = LAST_SAMPLES.get(LAST_SAMPLES.size()-1);
+            System.out.printf("Sampler: %d samples. Last={queue=%d, active=%d, completed=%d}%n",
+                    LAST_SAMPLES.size(), last.queueDepth(), last.activeWorkers(), last.completedTasks());
+        }
+return new Metrics(produced.get(), consumed.get(), callerRuns.get(), rejected.get(), workQueue.size(), LAST_SAMPLES.size());
     }
 }
