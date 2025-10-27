@@ -1,0 +1,20 @@
+# Maven
+target/
+**/target/
+!.mvn/wrapper/maven-wrapper.jar
+
+# IDEs
+*.iml
+.idea/
+.vscode/
+.project
+.classpath
+.settings/
+
+# OS
+.DS_Store
+
+# Logs
+*.log
+hs_err_pid*
+replay_pid*
