@@ -39,4 +39,19 @@ public class BackpressureRunnerTest {
         assertTrue(m.callerRuns() >= 0, "count is non-negative");
         // We don't assert exact value due to runtime variance, but it should be frequently non-zero
     }
+
+    @Test
+    @DisplayName("Metrics sampler records queue depth within bounds and non-empty sample list")
+    void metricsSamplerRecordsSamples() {
+        int pool = 2, cap = 16, sec = 1, rate = 200;
+        var m = BackpressureRunner.run(pool, cap, sec, rate);
+        var samples = BackpressureRunner.lastSamples();
+        assertTrue(samples.size() > 0, "samples should be non-empty");
+        for (var s : samples) {
+            assertTrue(s.queueDepth() >= 0 && s.queueDepth() <= cap,
+                "queue depth within [0, capacity] but was " + s.queueDepth());
+        }
+        assertEquals(samples.size(), m.samplesCount(), "metrics should expose sample count");
+    }
+
 }
