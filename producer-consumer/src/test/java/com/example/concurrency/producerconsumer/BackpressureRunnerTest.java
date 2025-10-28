@@ -54,4 +54,32 @@ public class BackpressureRunnerTest {
         assertEquals(samples.size(), m.samplesCount(), "metrics should expose sample count");
     }
 
+
+    @Test
+    @DisplayName("drain=true drains queue and consumes all produced tasks on slow workers")
+    void drainTrueConsumesAllAndEmptiesQueue() {
+        // Make workers slow by using 1 thread and a high production rate
+        System.setProperty("drain", "true");
+        try {
+            int pool = 1, cap = 64, sec = 1, rate = 2000;
+            var m = BackpressureRunner.run(pool, cap, sec, rate);
+            assertEquals(0, m.queueEnd(), "queue should be empty when drain=true");
+            assertTrue(m.consumed() >= m.produced(),
+                "consumed should reach produced (or slightly exceed if callerRuns executed inline)");
+        } finally {
+            System.clearProperty("drain");
+        }
+    }
+
+
+    @Test
+    @DisplayName("drain=false may leave queued tasks unprocessed")
+    void drainFalseMayLeaveQueue() {
+        System.setProperty("drain", "false");
+        int pool = 1, cap = 64, sec = 1, rate = 3000;
+        var m = BackpressureRunner.run(pool, cap, sec, rate);
+        boolean leftQueue = m.queueEnd() > 0 || m.consumed() < m.produced();
+        assertTrue(leftQueue, "without drain, run may exit before draining all tasks");
+    }
+
 }
