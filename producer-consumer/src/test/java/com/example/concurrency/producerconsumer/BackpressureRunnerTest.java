@@ -82,4 +82,47 @@ public class BackpressureRunnerTest {
         assertTrue(leftQueue, "without drain, run may exit before draining all tasks");
     }
 
+
+    @Test
+    @DisplayName("CallerRuns keeps rejected == 0 on bursty load")
+    void rejectionPolicyCallerRuns_NoRejects() {
+        System.setProperty("rejectionPolicy", "CallerRuns");
+        try {
+            var m = BackpressureRunner.run(1, 2, 1, 5000);
+            assertEquals(0, m.rejected(), "CallerRuns should absorb bursts without rejecting");
+            assertTrue(m.callerRuns() >= 0);
+        } finally {
+            System.clearProperty("rejectionPolicy");
+        }
+    }
+
+
+    @Test
+    @DisplayName("DropNewest increments rejected > 0 under tight queue")
+    void rejectionPolicyDropNewest_IncrementsRejected() {
+        System.setProperty("rejectionPolicy", "DropNewest");
+        try {
+            var m = BackpressureRunner.run(1, 2, 1, 5000);
+            assertTrue(m.rejected() > 0, "DropNewest should reject when queue is tight");
+        } finally {
+            System.clearProperty("rejectionPolicy");
+        }
+    }
+
+
+    @Test
+    @DisplayName("Block policy blocks instead of rejecting (no deadlock, within capacity)")
+    void rejectionPolicyBlock_NoRejectsNoDeadlock() {
+        System.setProperty("rejectionPolicy", "Block");
+        try {
+            var m = BackpressureRunner.run(1, 2, 1, 5000);
+            // Blocking should avoid rejected tasks
+            assertEquals(0, m.rejected(), "Block should not reject tasks");
+            // Sanity: produced/consumed should be positive
+            assertTrue(m.produced() > 0 && m.consumed() > 0);
+        } finally {
+            System.clearProperty("rejectionPolicy");
+        }
+    }
+
 }

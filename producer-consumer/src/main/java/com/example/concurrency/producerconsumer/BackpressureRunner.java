@@ -27,6 +27,9 @@ public class BackpressureRunner {
 
     /** Execute a run with the given parameters. */
     public static Metrics run(int poolSize, int queueCapacity, int durationSec, int producerRatePerSec) {
+        //Rejection policy switch (-DrejectionPolicy=CallerRuns|Block|DropNewest, default=CallerRuns)
+        final String rejectionPolicy = System.getProperty("rejectionPolicy", "CallerRuns");
+
         //Graceful drain flag from system property (-Ddrain=true)
         final boolean drain = Boolean.parseBoolean(System.getProperty("drain", "false"));
 
@@ -76,11 +79,30 @@ public class BackpressureRunner {
 
         // Backpressure strategy: run on caller thread when queue is full
         executor.setRejectedExecutionHandler((r, ex) -> {
-            callerRuns.incrementAndGet();
-            r.run();
-        });
-
-        Instant endAt = Instant.now().plusSeconds(durationSec);
+            switch (rejectionPolicy.toLowerCase()) {
+                case "callerruns":
+                    callerRuns.incrementAndGet();
+                    r.run();
+                    break;
+                case "dropnewest":
+                    // Drop the incoming task; count as rejected
+                    rejected.incrementAndGet();
+                    // do nothing else
+                    break;
+                case "block":
+                    // Block producer until space is available; do not increment rejected
+                    try {
+                        workQueue.put(r);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                    }
+                    break;
+                default:
+                    // Fallback to CallerRuns
+                    callerRuns.incrementAndGet();
+                    r.run();
+            }
+        });Instant endAt = Instant.now().plusSeconds(durationSec);
         long nanosPerItem = (long) (1_000_000_000.0 / Math.max(1, producerRatePerSec));
         Random rnd = new Random();
 
