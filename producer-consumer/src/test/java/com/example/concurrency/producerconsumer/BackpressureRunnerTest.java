@@ -147,4 +147,38 @@ public class BackpressureRunnerTest {
             System.clearProperty("backoff.nanos");
         }
     }
+
+    @Test
+    @DisplayName("checksum equals sum of processed task ids")
+    void checksumEqualsSumOfProcessedIds() {
+        System.setProperty("rejectionPolicy", "CallerRuns");
+        try {
+            var m = BackpressureRunner.run(2, 16, 1, 500);
+            var ids = BackpressureRunner.lastProcessedIds();
+            int sum = ids.stream().mapToInt(Integer::intValue).sum();
+            assertEquals(sum, m.checksum());
+            assertEquals(ids.size(), m.idsProcessed());
+        } finally {
+            System.clearProperty("rejectionPolicy");
+        }
+    }
+
+    @Test
+    @DisplayName("all produced ids are observed with no duplicates (CallerRuns)")
+    void allProducedIdsObserved_NoDuplicates() {
+        System.setProperty("rejectionPolicy", "CallerRuns");
+        System.setProperty("drain", "true"); // ensure we fully drain so produced == consumed == idsProcessed
+        try {
+            var m = BackpressureRunner.run(2, 32, 1, 800);
+            var ids = BackpressureRunner.lastProcessedIds();
+            java.util.Set<Integer> set = new java.util.HashSet<>(ids);
+            assertEquals(set.size(), ids.size(), "no duplicate ids");
+            assertEquals(0, m.rejected());
+            assertEquals(m.produced(), m.consumed());   // with drain, should fully catch up
+            assertEquals(m.produced(), m.idsProcessed());
+        } finally {
+            System.clearProperty("rejectionPolicy");
+            System.clearProperty("drain");
+        }
+    }
 }

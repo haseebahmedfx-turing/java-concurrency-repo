@@ -11,6 +11,12 @@ import java.util.concurrent.locks.LockSupport;
  * a rejection handler that runs work on the caller thread.
  */
 public class BackpressureRunner {
+    public record Task(int id, int payload) {}
+    private static volatile java.util.List<Integer> LAST_PROCESSED_IDS = java.util.List.of();
+    private static volatile int LAST_CHECKSUM = 0;
+    public static java.util.List<Integer> lastProcessedIds() { return LAST_PROCESSED_IDS; }
+    public static int lastChecksum() { return LAST_CHECKSUM; }
+    
     /** A single periodic snapshot of the executor state. */
     public record Sample(long epochMillis, int queueDepth, int activeWorkers, long completedTasks) {}
 
@@ -23,10 +29,14 @@ public class BackpressureRunner {
     }
 
     /** Captures essential metrics for quick assertions. */
-    public record Metrics(int produced, int consumed, int callerRuns, int rejected, int queueEnd, int samplesCount) {}
+    public record Metrics(int produced, int consumed, int callerRuns, int rejected, int queueEnd, int samplesCount, int checksum, int idsProcessed) {}
 
     /** Execute a run with the given parameters. */
     public static Metrics run(int poolSize, int queueCapacity, int durationSec, int producerRatePerSec) {
+        final java.util.concurrent.atomic.AtomicInteger nextId = new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.atomic.AtomicInteger checksum = new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.List<Integer> processedIds = new java.util.concurrent.CopyOnWriteArrayList<>();
+    
         //backoff controls
         final boolean backoffEnabled = Boolean.parseBoolean(System.getProperty("backoff.enabled", "true"));
         final double backoffThreshold = Double.parseDouble(System.getProperty("backoff.threshold", "0.25"));
@@ -116,14 +126,17 @@ public class BackpressureRunner {
             while (Instant.now().isBefore(endAt)) {
                 try {
                     produced.incrementAndGet();
+                    { Task task = new Task(nextId.incrementAndGet(), rnd.nextInt(10));
                     executor.execute(() -> {
                         try {
                             Thread.sleep(2 + rnd.nextInt(8));
+                            checksum.addAndGet(task.id());
+                            processedIds.add(task.id());
                             consumed.incrementAndGet();
                         } catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
                         }
-                    });
+                    }); }
                 } catch (RejectedExecutionException rex) {
                     rejected.incrementAndGet();
                 }
@@ -186,6 +199,9 @@ next += nanosPerItem;
                     LAST_SAMPLES.size(), last.queueDepth(), last.activeWorkers(), last.completedTasks());
         }
 
-        return new Metrics(produced.get(), consumed.get(), callerRuns.get(), rejected.get(), workQueue.size(), LAST_SAMPLES.size());
+        
+        LAST_PROCESSED_IDS = java.util.Collections.unmodifiableList(new java.util.ArrayList<>(processedIds));
+        LAST_CHECKSUM = checksum.get();
+return new Metrics(produced.get(), consumed.get(), callerRuns.get(), rejected.get(), workQueue.size(), LAST_SAMPLES.size(), checksum.get(), processedIds.size());
     }
 }
