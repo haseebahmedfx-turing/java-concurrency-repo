@@ -54,7 +54,6 @@ public class BackpressureRunnerTest {
         assertEquals(samples.size(), m.samplesCount(), "metrics should expose sample count");
     }
 
-
     @Test
     @DisplayName("drain=true drains queue and consumes all produced tasks on slow workers")
     void drainTrueConsumesAllAndEmptiesQueue() {
@@ -71,17 +70,19 @@ public class BackpressureRunnerTest {
         }
     }
 
-
     @Test
     @DisplayName("drain=false may leave queued tasks unprocessed")
     void drainFalseMayLeaveQueue() {
         System.setProperty("drain", "false");
-        int pool = 1, cap = 64, sec = 1, rate = 3000;
-        var m = BackpressureRunner.run(pool, cap, sec, rate);
-        boolean leftQueue = m.queueEnd() > 0 || m.consumed() < m.produced();
-        assertTrue(leftQueue, "without drain, run may exit before draining all tasks");
+        try {
+            int pool = 1, cap = 64, sec = 1, rate = 3000;
+            var m = BackpressureRunner.run(pool, cap, sec, rate);
+            boolean leftQueue = m.queueEnd() > 0 || m.consumed() < m.produced();
+            assertTrue(leftQueue, "without drain, run may exit before draining all tasks");
+        } finally {
+            System.clearProperty("drain");
+        }
     }
-
 
     @Test
     @DisplayName("CallerRuns keeps rejected == 0 on bursty load")
@@ -96,7 +97,6 @@ public class BackpressureRunnerTest {
         }
     }
 
-
     @Test
     @DisplayName("DropNewest increments rejected > 0 under tight queue")
     void rejectionPolicyDropNewest_IncrementsRejected() {
@@ -108,7 +108,6 @@ public class BackpressureRunnerTest {
             System.clearProperty("rejectionPolicy");
         }
     }
-
 
     @Test
     @DisplayName("Block policy blocks instead of rejecting (no deadlock, within capacity)")
@@ -125,4 +124,27 @@ public class BackpressureRunnerTest {
         }
     }
 
+    @Test
+    @DisplayName("backoff reduces callerRuns compared to baseline on tiny capacity")
+    void backoffReducesCallerRuns() {
+        // Baseline (backoff disabled)
+        System.setProperty("backoff.enabled", "false");
+        try {
+            int pool = 1, cap = 1, sec = 1, rate = 8000;
+            var base = BackpressureRunner.run(pool, cap, sec, rate);
+
+            // With backoff (enable and lower threshold to trigger sooner)
+            System.setProperty("backoff.enabled", "true");
+            System.setProperty("backoff.threshold", "0.05");
+            System.setProperty("backoff.nanos", "200000"); // 0.2 ms
+            var tuned = BackpressureRunner.run(pool, cap, sec, rate);
+
+            assertTrue(tuned.callerRuns() <= base.callerRuns(),
+                "backoff should reduce (or at least not increase) callerRuns");
+        } finally {
+            System.clearProperty("backoff.enabled");
+            System.clearProperty("backoff.threshold");
+            System.clearProperty("backoff.nanos");
+        }
+    }
 }

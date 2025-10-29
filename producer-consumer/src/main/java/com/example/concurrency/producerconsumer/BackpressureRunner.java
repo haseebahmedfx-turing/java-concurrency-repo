@@ -27,6 +27,11 @@ public class BackpressureRunner {
 
     /** Execute a run with the given parameters. */
     public static Metrics run(int poolSize, int queueCapacity, int durationSec, int producerRatePerSec) {
+        //backoff controls
+        final boolean backoffEnabled = Boolean.parseBoolean(System.getProperty("backoff.enabled", "true"));
+        final double backoffThreshold = Double.parseDouble(System.getProperty("backoff.threshold", "0.25"));
+        final long backoffNanos = Long.parseLong(System.getProperty("backoff.nanos", "200000"));
+    
         //Rejection policy switch (-DrejectionPolicy=CallerRuns|Block|DropNewest, default=CallerRuns)
         final String rejectionPolicy = System.getProperty("rejectionPolicy", "CallerRuns");
 
@@ -123,7 +128,16 @@ public class BackpressureRunner {
                     rejected.incrementAndGet();
                 }
 
-                next += nanosPerItem;
+                
+                //back off if callerRuns ratio crosses threshold
+                if (backoffEnabled) {
+                    int p = Math.max(1, produced.get());
+                    double ratio = (double) callerRuns.get() / (double) p;
+                    if (ratio >= backoffThreshold) {
+                        java.util.concurrent.locks.LockSupport.parkNanos(backoffNanos);
+                    }
+                }
+next += nanosPerItem;
                 long sleepNanos = next - System.nanoTime();
                 if (sleepNanos > 0) {
                     LockSupport.parkNanos(sleepNanos);
