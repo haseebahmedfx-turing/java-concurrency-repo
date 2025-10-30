@@ -1,10 +1,18 @@
 package com.example.concurrency.deadlock;
 
+import java.lang.management.ThreadInfo;
+
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
 /** Two minimal fixes: consistent ordering and timed tryLock with backoff. */
 public class DeadlockFix {
+    private static void printNoDeadlocksIfNone() {
+        if (DeadlockDetector.findDeadlocked().length == 0) {
+            System.out.println("[DeadlockDetector] no deadlocks detected in fix variant");
+        }
+    }
+
 
     static class Ordered {
         final ReentrantLock a = new ReentrantLock();

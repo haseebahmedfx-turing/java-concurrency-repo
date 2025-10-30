@@ -1,5 +1,7 @@
 package com.example.concurrency.deadlock;
 
+import java.lang.management.ThreadInfo;
+
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -17,6 +19,7 @@ public class DeadlockDemo {
         t2.setDaemon(true);
         t1.start();
         t2.start();
+        try { DeadlockDetector.awaitDeadlock(500, 25); DeadlockDetector.printIfAny(System.out); } catch (InterruptedException ignored) {}
         Thread.sleep(1200);
         System.out.printf("T1 alive=%s, T2 alive=%s%n", t1.isAlive(), t2.isAlive());
     }
