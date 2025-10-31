@@ -1,5 +1,8 @@
 package com.example.concurrency.parallelio;
 
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import java.net.http.HttpClient;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -12,9 +15,11 @@ import java.util.concurrent.Executors;
 
 /**
  * CompletableFuture-based parallel fetch demo.
- * IO-01: returns results sorted by latency and prints a success/failure summary.
+ * returns results sorted by latency and prints a success/failure summary.
  */
 public class ParallelFetchCf {
+    private static volatile int lastPeakConcurrency = 0;
+    public static int lastPeakConcurrency() { return lastPeakConcurrency; }
 
     /** Result of one fetch. */
     public record Result(String id, long millis, boolean simulated, int status) {
@@ -63,7 +68,12 @@ public class ParallelFetchCf {
 
         int pool = Integer.getInteger("io.pool", 8);
         ExecutorService exec = Executors.newFixedThreadPool(pool);
-        try {
+                //Concurrency cap via Semaphore
+        final int cap = Integer.getInteger("io.cf.cap", 8);
+        final Semaphore gate = new Semaphore(Math.max(1, cap));
+        final AtomicInteger inFlight = new AtomicInteger();
+        final AtomicInteger peak = new AtomicInteger();
+try {
             HttpClient http = HttpClient.newBuilder()
                     .connectTimeout(Duration.ofSeconds(5))
                     .executor(exec)
@@ -72,8 +82,19 @@ public class ParallelFetchCf {
             List<CompletableFuture<Result>> futures = new ArrayList<>();
             for (String in : inputs) {
                 futures.add(CompletableFuture.supplyAsync(() -> {
-                    if (in.startsWith("sim")) return simulateFetch(in);
+                    try {
+                        gate.acquire();
+                        int now = inFlight.incrementAndGet();
+                        peak.accumulateAndGet(now, Math::max);
+                        if (in.startsWith("sim")) return simulateFetch(in);
                     return realFetch(http, in);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return new Result("interrupted", -1, true, 1);
+                    } finally {
+                        inFlight.decrementAndGet();
+                        gate.release();
+                    }
                 }, exec));
             }
 
@@ -83,6 +104,8 @@ public class ParallelFetchCf {
             }
 
             results.sort(Comparator.comparingLong(Result::millis));
+            lastPeakConcurrency = peak.get();
+            System.out.println("[ParallelIO/CF] peakConcurrency=" + lastPeakConcurrency);
             printSummary(results);
             return results;
         } finally {
