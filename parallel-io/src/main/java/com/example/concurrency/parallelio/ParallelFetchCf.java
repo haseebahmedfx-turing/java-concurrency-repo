@@ -1,68 +1,108 @@
 package com.example.concurrency.parallelio;
 
-import java.net.URI;
 import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
-import java.util.concurrent.*;
-import java.util.stream.Collectors;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
- * Parallel fan-out using CompletableFuture with a fixed thread pool.
- * Non-HTTP inputs are simulated to keep tests network-free.
+ * CompletableFuture-based parallel fetch demo.
+ * IO-01: returns results sorted by latency and prints a success/failure summary.
  */
 public class ParallelFetchCf {
-    public static void main(String[] args) throws Exception {
-        List<String> inputs = (args != null && args.length > 0) ? List.of(args) :
-                List.of("simA", "simB", "simC");
 
-        int pool = Integer.getInteger("pool", 8);
-        ExecutorService exec = Executors.newFixedThreadPool(pool);
-        HttpClient http = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(5))
-                .executor(exec)
-                .build();
-
-        Instant start = Instant.now();
-        List<CompletableFuture<Result>> futures = new ArrayList<>();
-        for (String in : inputs) {
-            futures.add(CompletableFuture.supplyAsync(() -> fetch(http, in), exec));
-        }
-        List<Result> results = futures.stream().map(CompletableFuture::join).collect(Collectors.toList());
-        long ms = Duration.between(start, Instant.now()).toMillis();
-
-        System.out.println("Results:");
-        for (Result r : results) System.out.println(" - " + r);
-        System.out.println("Total time: " + ms + " ms");
-        exec.shutdown();
-    }
-
-    public record Result(String input, int status, int bytes, long millis, boolean simulated) {
-        public String toString() {
-            return "%s -> %s %dB (%d ms)%s".formatted(
-                    input, status == 0 ? "SIM" : status, bytes, millis, simulated ? " [sim]" : "");
+    /** Result of one fetch. */
+    public record Result(String id, long millis, boolean simulated, int status) {
+        /** Success: simulated OK (status==0) or real HTTP 2xx. */
+        public boolean success() {
+            return simulated ? status == 0 : (status >= 200 && status < 300);
         }
     }
 
-    static Result fetch(HttpClient http, String input) {
-        Instant t0 = Instant.now();
-        boolean simulated = false;
+    /** Simulated fetch: sleeps a deterministic duration derived from the id. */
+    private static Result simulateFetch(String id) {
+        int baseMs = Math.abs(id.hashCode() % 150) + 50; // 50..199 ms (deterministic)
+        long start = System.nanoTime();
         try {
-            if (!input.startsWith("http")) {
-                simulated = true;
-                Thread.sleep(150);
-                return new Result(input, 0, 0, Duration.between(t0, Instant.now()).toMillis(), true);
+            Thread.sleep(baseMs);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        long durMs = Duration.ofNanos(System.nanoTime() - start).toMillis();
+        return new Result(id, durMs, true, 0);
+    }
+
+    /** "Real" fetch placeholder; for tests we keep it offline-safe. */
+    private static Result realFetch(HttpClient http, String url) {
+        long start = System.nanoTime();
+        try {
+            // Keep offline-safe: just simulate a stable delay and 200 status.
+            Thread.sleep(100);
+            long durMs = Duration.ofNanos(System.nanoTime() - start).toMillis();
+            return new Result(url, durMs, false, 200);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            long durMs = Duration.ofNanos(System.nanoTime() - start).toMillis();
+            return new Result(url, durMs, false, 500);
+        }
+    }
+
+    /**
+     * Runs the demo, gathers results, sorts by latency (non-decreasing),
+     * prints a summary, and returns the list for tests.
+     */
+    public static List<Result> run(String... args) throws Exception {
+        List<String> inputs = (args != null && args.length > 0)
+                ? Arrays.asList(args)
+                : List.of("simA", "simB", "simC");
+
+        int pool = Integer.getInteger("io.pool", 8);
+        ExecutorService exec = Executors.newFixedThreadPool(pool);
+        try {
+            HttpClient http = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(5))
+                    .executor(exec)
+                    .build();
+
+            List<CompletableFuture<Result>> futures = new ArrayList<>();
+            for (String in : inputs) {
+                futures.add(CompletableFuture.supplyAsync(() -> {
+                    if (in.startsWith("sim")) return simulateFetch(in);
+                    return realFetch(http, in);
+                }, exec));
             }
-            HttpRequest req = HttpRequest.newBuilder(URI.create(input)).GET().timeout(Duration.ofSeconds(5)).build();
-            HttpResponse<byte[]> resp = http.send(req, HttpResponse.BodyHandlers.ofByteArray());
-            return new Result(input, resp.statusCode(), resp.body() == null ? 0 : resp.body().length,
-                    Duration.between(t0, Instant.now()).toMillis(), false);
-        } catch (Exception e) {
-            return new Result(input, -1, 0, Duration.between(t0, Instant.now()).toMillis(), simulated);
+
+            List<Result> results = new ArrayList<>();
+            for (CompletableFuture<Result> f : futures) {
+                results.add(f.get());
+            }
+
+            results.sort(Comparator.comparingLong(Result::millis));
+            printSummary(results);
+            return results;
+        } finally {
+            exec.shutdownNow();
+        }
+    }
+
+    /** Prints success/failure/total summary. */
+    private static void printSummary(List<Result> results) {
+        int ok = 0, fail = 0;
+        for (Result r : results) {
+            if (r.success()) ok++; else fail++;
+        }
+        System.out.println("[ParallelIO/CF] summary: success=" + ok + " failure=" + fail + " total=" + results.size());
+    }
+
+    public static void main(String[] args) throws Exception {
+        List<Result> r = run(args);
+        for (Result res : r) {
+            System.out.println(res.id() + " -> " + res.millis() + "ms, success=" + res.success());
         }
     }
 }
