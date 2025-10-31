@@ -70,4 +70,39 @@ public class ParallelIoTest {
         }
     }
 
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("retry=2 makes flaky input succeed on 3rd attempt and time accounts for backoff")
+    void cfRetriesSucceedAndTimeIncludesBackoff() throws Exception {
+        System.setProperty("io.sim.flaky.failures", "2");
+        System.setProperty("io.retry.backoff.millis", "150");
+        try {
+            var results = com.example.concurrency.parallelio.ParallelFetchCf.run("flakyCF");
+            org.junit.jupiter.api.Assertions.assertEquals(1, results.size());
+            var r = results.get(0);
+            org.junit.jupiter.api.Assertions.assertTrue(r.success(), "should succeed after 2 retries");
+            org.junit.jupiter.api.Assertions.assertTrue(r.millis() >= 300, "duration should include two backoffs");
+        } finally {
+            System.clearProperty("io.sim.flaky.failures");
+            System.clearProperty("io.retry.backoff.millis");
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("retry=2 makes flaky input succeed on 3rd attempt and time accounts for backoff")
+    void loomRetriesSucceedAndTimeIncludesBackoff() throws Exception {
+        System.setProperty("io.sim.flaky.failures", "2");
+        System.setProperty("io.retry.backoff.millis", "150");
+        try {
+            var results = com.example.concurrency.parallelio.ParallelFetchLoom.run("flakyLoom");
+            org.junit.jupiter.api.Assertions.assertEquals(1, results.size());
+            var r = results.get(0);
+            org.junit.jupiter.api.Assertions.assertTrue(r.success(), "should succeed after 2 retries");
+            org.junit.jupiter.api.Assertions.assertTrue(r.millis() >= 300, "duration should include two backoffs");
+        } finally {
+            System.clearProperty("io.sim.flaky.failures");
+            System.clearProperty("io.retry.backoff.millis");
+        }
+    }
+
 }
